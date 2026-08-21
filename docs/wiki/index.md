@@ -6,6 +6,7 @@
 - decisions/0003-suspendable-turns-chain-of-rounds.md — durable goal object drives chained turns; engine extracted first (accepted)
 - decisions/0004-deepseek-via-opencode-go.md — primary model rides opencodeGo ACP; usage accounting caveat (proposed → CP1)
 - decisions/0005-benchmark-seam-and-gating.md — MausBotDriver = avenza HarnessDriver contract; /api/internal gating (accepted)
+- decisions/0006-cp1-deferred-autonomous.md — CP1 deferred per user authorization; overridable at CP2/CP3 (accepted)
 
 ## Context
 - context/research/port-dossier/FIT-EVALUATION.md — graft map: high fit, one inversion (durability net-new)
@@ -25,4 +26,15 @@
 - (empty — spec lands at CP1)
 
 ## Wayfinder
-- (map charted at Phase 2)
+- wayfinder/README.md — destination, decisions-so-far, frontier (#2–#8 on fork issues), fog, out-of-scope
+- Fork issues: github.com/matheusht/OpenMausBot/issues (labels wayfinder:*)
+
+## Implementation
+- server/engine/event-log.ts — durable envelope log: commit-before-publish outbox, CAS turn states (+test)
+- server/engine/budgets.ts — 4-class budget policy, soft-80%/hard outcomes (+test)
+- server/engine/waves.ts — planDispatch layering, reads-first, solo writes (+test)
+- server/engine/goals.ts — GoalManager chain-of-rounds with continuation decision (+test)
+- server/engine/hitl.ts — bounded HITL waits over injected subscription
+- server/engine/plan-state.ts — plan mode as revisioned logged fold
+- server/engine/feedback.ts — log-only feedback capture (contract A)
+- engine-modules.test.ts — hitl/plan/feedback suites

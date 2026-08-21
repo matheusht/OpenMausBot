@@ -5,6 +5,24 @@ Branch created from upstream main (milind-soni/OpenMausBot @ 0.1.27). Wiki skele
 pre-goal dossier (6 briefs, fit evaluation, goal prompt) filed under context/research/port-dossier/.
 Fork + push deferred pending user go-ahead; wayfinder map comes at Phase 2 (CP1).
 
+## [2026-08-20] wayfinder | Phase 2 charted — fork live, map + tickets filed
+Fork matheusht/OpenMausBot created; benchmark/port-v1 pushed (tracking fork). Benchmark spec
+(benchmark/README.md) + wayfinder map + ADR 0006 (CP1 deferred per user authorization,
+overridable at CP2/CP3) landed. Tickets #1–#8 on the fork (map, research deepseek-zen, tasks
+PR-1/event-log/goals/pure-modules, prototype driver+seed, grilling HITL left OPEN for human).
+
+## [2026-08-20] implement | P3a additive engine modules — 35 tests green
+server/engine/: event-log.ts (events.db, envelope commit-before-publish, CAS turn states,
+user_version migrations), budgets.ts (4 classes, soft-80%/hard), waves.ts (Kahn layering,
+≤8 reads, solo writes — reads-first policy chosen by test), goals.ts (chain-of-rounds
+GoalManager: structural round reservation = one in-flight round, continuation decision,
+prompt synthesis, restart survival), hitl.ts (bounded waits over injected subscription),
+plan-state.ts (whole-value fold + narrative events), feedback.ts (log-only, contract A).
+Gates per module: vitest + typecheck + oxlint engine-clean. Feedback-loop fixes: mkdir before
+open, test isolation via setup.ts HOME redirect (not OMB_DATA_DIR), duplicate-round guard =
+one in-flight round, reads-first wave policy, SAFETY comments per anti-slop lint.
+Next: event-mapper + bus wiring (append-only subscriber), then PR-1 extraction (#3).
+
 ## [2026-08-20] research | Phase 1 complete — 2 rounds, 6 briefs, 5 ADRs
 Round 1 (mausbot): long-flow lifecycle (chain-of-rounds recommended; crash matrix + reconciler
 sweep list), index.ts extraction seams (server/engine/ layout + behavior-preserving PR-1),
