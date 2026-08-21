@@ -23,6 +23,15 @@ open, test isolation via setup.ts HOME redirect (not OMB_DATA_DIR), duplicate-ro
 one in-flight round, reads-first wave policy, SAFETY comments per anti-slop lint.
 Next: event-mapper + bus wiring (append-only subscriber), then PR-1 extraction (#3).
 
+## [2026-08-20] implement | Durable event log LIVE in the server — full suite green
+event-mapper.ts (RuntimeEvent → avenza envelope families; lossless narrative/status fallback)
++ reconciler.ts (outbox drain, age-gated omb-mcp-* tmpdir sweep). Wired into index.ts as the
+FIRST bus subscriber — every downstream consumer (watchdog clock, fold, SSE) now only sees
+committed events; shutdown closes events.db. Regression net: FULL pnpm test green — 142 files,
+1390 passed/12 skipped, floor 1402≥1070, packaged-server smoke + broker + updater all pass.
+Commits 2980f62..b9e7baa pushed to fork. Next frontier: #3 PR-1 turn-engine extraction
+(plan filed in round1-mausbot-extraction.md §6), then #7 MausBotDriver + /api/internal seam.
+
 ## [2026-08-20] research | Phase 1 complete — 2 rounds, 6 briefs, 5 ADRs
 Round 1 (mausbot): long-flow lifecycle (chain-of-rounds recommended; crash matrix + reconciler
 sweep list), index.ts extraction seams (server/engine/ layout + behavior-preserving PR-1),
