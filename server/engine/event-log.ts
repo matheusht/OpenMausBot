@@ -102,6 +102,13 @@ function migrate(db: DatabaseSync): void {
         );
       `);
     },
+    // v2: thread ownership on events — the eval seam resolves "the latest
+    // turn of this thread" through this column (drivers speak in threads;
+    // drivers' turn ids are minted inside the provider layer).
+    (database) => {
+      database.exec("ALTER TABLE events ADD COLUMN thread_id TEXT");
+      database.exec("CREATE INDEX IF NOT EXISTS events_thread ON events(thread_id)");
+    },
   ];
   for (let v = current; v < steps.length; v++) {
     db.exec("BEGIN IMMEDIATE");
@@ -129,6 +136,8 @@ function db(): DatabaseSync {
 
 export interface CommitEventInput {
   turn_id: string;
+  /** owning thread, when known — enables thread→turn lookups */
+  thread_id?: string;
   family: EventFamily;
   kind: string;
   item_id?: string;
@@ -168,7 +177,7 @@ export function commitEvent(input: CommitEventInput): EventEnvelope {
     const clean = redactSecrets(envelope) as EventEnvelope;
     database
       .prepare(
-        "INSERT INTO events (turn_id, seq, event_id, family, kind, item_id, occurred_at, envelope) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO events (turn_id, seq, event_id, family, kind, item_id, occurred_at, envelope, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         clean.turn_id,
@@ -179,6 +188,7 @@ export function commitEvent(input: CommitEventInput): EventEnvelope {
         clean.item_id ?? null,
         clean.occurred_at,
         JSON.stringify(clean),
+        input.thread_id ?? null,
       );
     database
       .prepare("INSERT INTO event_outbox (turn_id, seq, published) VALUES (?, ?, 0)")
@@ -257,6 +267,23 @@ export function unpublishedEvents(): Array<{ turn_id: string; seq: number }> {
 
 export function markPublished(turnId: string, seq: number): void {
   db().prepare("UPDATE event_outbox SET published = 1 WHERE turn_id = ? AND seq = ?").run(turnId, seq);
+}
+
+/** The most recent real turn of a thread (thread-scoped session events
+ * excluded). Null when the thread has no provider turn yet. */
+export function latestTurnForThread(threadId: string): string | null {
+  const row = db()
+    .prepare("SELECT turn_id FROM events WHERE thread_id = ? AND turn_id != ? ORDER BY rowid DESC LIMIT 1")
+    .get(threadId, threadId);
+  // SAFETY: the SELECT projects exactly the turn_id column.
+  return (row as { turn_id: string } | undefined)?.turn_id ?? null;
+}
+
+/** Count of a kind for a turn — the eval runner's iteration proxy. */
+export function countKind(turnId: string, kind: string): number {
+  const row = db().prepare("SELECT COUNT(*) AS n FROM events WHERE turn_id = ? AND kind = ?").get(turnId, kind);
+  // SAFETY: COUNT(*) projects exactly one integer column.
+  return (row as { n: number }).n;
 }
 
 /** Test/shutdown hook — closes the handle so a wiped DATA_DIR starts clean. */

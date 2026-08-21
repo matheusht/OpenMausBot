@@ -12,6 +12,9 @@ carrying a before/after delta vs the stock-mausbot baseline and the avenza run15
   every session; never push upstream.
 
 ## Decisions so far
+- #6 CLOSED — budgets/waves/hitl/plan/feedback pure modules landed (43 engine tests; commits d94316c..2980f62)
+- eval seam v0 LIVE: /api/internal/eval/{turns,status,events,seed} behind OMB_EVAL_TOKEN bearer;
+  turn state machine folded off the bus stream; smoke-verified vs a live server (status/events/seed)
 - 0001 port shape (benchmark-driven, 3 checkpoints, wiki memory) — accepted
 - 0002 spine on SQLite, no infra transplant — accepted
 - 0003 suspendable turns = chain-of-rounds over resumeCursor; engine extraction first — accepted

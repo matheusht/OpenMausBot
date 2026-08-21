@@ -2,7 +2,7 @@
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { readFileSync, unlinkSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
 import { extname, join } from "node:path";
@@ -46,7 +46,7 @@ import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts"
 import { describeSpawnFailure, execCli } from "./procs.ts";
 import { buildNotification, type Notification } from "./notify.ts";
 import { isEffortLevel, type RequestOutcome, type RuntimeEvent } from "./contracts.ts";
-import { closeEventDb, commitEvent, markPublished, unpublishedEvents } from "./engine/event-log.ts";
+import { closeEventDb, commitEvent, insertTurnRow, latestTurnForThread, countKind, markPublished, transitionTurnState, turnStatus, unpublishedEvents, eventsSince } from "./engine/event-log.ts";
 import { mapRuntimeEvent } from "./engine/event-mapper.ts";
 import { reconcileEventLog, sweepMcpTmpdirs } from "./engine/reconciler.ts";
 
@@ -132,8 +132,24 @@ bus.subscribe((event: RuntimeEvent) => {
   // Events before a turn exists (session handshakes) log under the thread
   // scope — seq stays monotonic per key either way.
   const scope = event.turnId ?? event.threadId;
-  const envelope = commitEvent(mapRuntimeEvent(event, scope));
+  const envelope = commitEvent({ ...mapRuntimeEvent(event, scope), thread_id: event.threadId });
   markPublished(envelope.turn_id, envelope.seq);
+  // The avenza turn state machine, folded off the same stream (ADR 0003):
+  // accepted→running on the first provider event, awaiting_input while a
+  // card is open, terminal exactly once on turn.completed.
+  if (event.type === "turn.started") {
+    insertTurnRow(scope, "accepted");
+    transitionTurnState(scope, "accepted", "running");
+  } else if (event.type === "request.opened") {
+    transitionTurnState(scope, "running", "awaiting_input");
+  } else if (event.type === "request.resolved") {
+    transitionTurnState(scope, "awaiting_input", "running");
+  } else if (event.type === "turn.completed") {
+    const status = turnStatus(scope);
+    if (status && !["succeeded", "failed", "stopped", "cancelled", "timed_out"].includes(status.state)) {
+      transitionTurnState(scope, status.state, event.ok ? "succeeded" : "failed");
+    }
+  }
 });
 
 // ── peer-agent comms wiring ────────────────────────────────────────────
@@ -2308,8 +2324,84 @@ const server = createServer(async (req, res) => {
     // The agents-proxy (spawned inside a bot's agent process) calls these to
     // discover peers and hand a message to one. Not part of the public API.
     if (path.startsWith("/api/internal/")) {
-      if (!authorizedComms(req.headers.authorization)) {
+      // Eval-seam routes accept a second, dedicated bearer (OMB_EVAL_TOKEN)
+      // so benchmark tooling never needs the per-boot comms token. The env
+      // var is dev-rig only — electron/main.mjs never sets it, so packaged
+      // apps physically cannot enable this path (ADR 0005).
+      const evalToken = process.env.OMB_EVAL_TOKEN;
+      const evalAuthorized =
+        path.startsWith("/api/internal/eval/") &&
+        evalToken !== undefined &&
+        evalToken.length > 0 &&
+        req.headers.authorization === `Bearer ${evalToken}`;
+      if (!authorizedComms(req.headers.authorization) && !evalAuthorized) {
         return json(res, 401, { error: "unauthorized" });
+      }
+
+      // ── eval seam v0 (ADR 0005): MausBotDriver's surface ──────────────
+      // avenza vocabulary over mausbot primitives: start a turn, read its
+      // durable state machine, replay committed envelopes, seed fixtures.
+      if (method === "POST" && path === "/api/internal/eval/turns") {
+        const body = await readBody(req);
+        const bot = store.bot(String(body.bot_id ?? ""));
+        if (!bot) return json(res, 404, { error: "no such bot" });
+        const text = String(body.text ?? "").trim();
+        if (!text) return json(res, 400, { error: "text required" });
+        try {
+          await startTurn(bot.id, text);
+        } catch (error) {
+          // SAFETY: startTurn attaches a numeric `status` to its rejections
+          // (404 no bot / 409 busy); anything else is a server fault.
+          const status = (error as { status?: number }).status ?? 500;
+          // SAFETY: every rejection startTurn throws carries a message.
+          const message = (error as Error).message;
+          return json(res, status, { error: message });
+        }
+        return json(res, 202, { ok: true, thread_id: bot.threadId });
+      }
+      if (method === "GET" && path === "/api/internal/eval/status") {
+        const threadId = url.searchParams.get("thread_id") ?? "";
+        const turnId = latestTurnForThread(threadId);
+        if (!turnId) return json(res, 404, { error: "no turns for thread" });
+        const status = turnStatus(turnId);
+        if (!status) return json(res, 404, { error: "no such turn" });
+        // pending = an opened card with no later resolution
+        let pendingSetId: string | null = null;
+        for (const envelope of eventsSince(turnId, 0)) {
+          if (envelope.kind === "pending_set_opened") pendingSetId = envelope.item_id ?? null;
+          if (envelope.kind === "pending_set_resolved") pendingSetId = null;
+        }
+        return json(res, 200, {
+          turn_id: status.turn_id,
+          state: status.state,
+          current_iteration: countKind(turnId, "tool_call_started"),
+          last_committed_seq: status.last_committed_seq,
+          pending_set_id: pendingSetId,
+        });
+      }
+      if (method === "GET" && path === "/api/internal/eval/events") {
+        const turnId = url.searchParams.get("turn_id") ?? "";
+        const after = Number(url.searchParams.get("after") ?? 0);
+        return json(res, 200, { events: eventsSince(turnId, Number.isFinite(after) ? after : 0) });
+      }
+      if (method === "POST" && path === "/api/internal/eval/seed") {
+        const body = await readBody(req);
+        const bot = store.bot(String(body.bot_id ?? ""));
+        if (!bot) return json(res, 404, { error: "no such bot" });
+        const files = Array.isArray(body.files) ? body.files : [];
+        const workspace = ensureWorkspace(bot.id);
+        let written = 0;
+        for (const file of files.slice(0, 200)) {
+          // basename-only: fixtures land in the workspace root, never
+          // escape it via traversal paths (avenza's ingestion discipline)
+          const name = String(file.path ?? "").split(/[\\/]/).pop();
+          if (!name || name === "." || name === "..") continue;
+          const bytes = Buffer.from(String(file.content_base64 ?? ""), "base64");
+          if (bytes.length > 25 * 1024 * 1024) continue;
+          writeFileSync(join(workspace, name), bytes, { mode: 0o600 });
+          written += 1;
+        }
+        return json(res, 200, { ok: true, written, workspace });
       }
       if (method === "GET" && path === "/api/internal/agents") {
         const self = url.searchParams.get("self");
