@@ -152,18 +152,19 @@ export function commitEvent(input: CommitEventInput): EventEnvelope {
     occurred_at: new Date().toISOString(),
     family: input.family,
     kind: input.kind,
-    ...(input.item_id !== undefined ? { item_id: input.item_id } : {}),
-    ...(input.causation_id !== undefined ? { causation_id: input.causation_id } : {}),
-    ...(input.trace_id !== undefined ? { trace_id: input.trace_id } : {}),
     payload: input.payload ?? null,
   };
+  if (input.item_id !== undefined) envelope.item_id = input.item_id;
+  if (input.causation_id !== undefined) envelope.causation_id = input.causation_id;
+  if (input.trace_id !== undefined) envelope.trace_id = input.trace_id;
   database.exec("BEGIN IMMEDIATE");
   try {
-    const row = database
-      .prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM events WHERE turn_id = ?")
-      .get(input.turn_id) as { next: number };
-    envelope.seq = row.next;
+    const row = database.prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM events WHERE turn_id = ?").get(input.turn_id);
+    // SAFETY: the SELECT projects exactly one aliased column, `next`.
+    envelope.seq = (row as { next: number }).next;
     // Redact at the boundary: what hits disk is what everyone reads back.
+    // SAFETY: redactSecrets deep-walks and returns the same object shape
+    // it was given; only string values may change.
     const clean = redactSecrets(envelope) as EventEnvelope;
     database
       .prepare(
@@ -229,23 +230,29 @@ export function turnStatus(turnId: string): TurnStatusRow | null {
     .prepare(
       "SELECT t.turn_id, t.state, t.revision, COALESCE((SELECT MAX(seq) FROM events WHERE turn_id = t.turn_id), 0) AS last_committed_seq FROM turns t WHERE t.turn_id = ?",
     )
-    .get(turnId) as TurnStatusRow | undefined;
-  return row ?? null;
+    .get(turnId);
+  // SAFETY: the SELECT projects exactly turn_id/state/revision plus the
+  // aliased max-seq column, matching TurnStatusRow's fields.
+  return (row as TurnStatusRow | undefined) ?? null;
 }
 
 /** Replay events strictly after `afterSeq`, oldest first. */
 export function eventsSince(turnId: string, afterSeq: number): EventEnvelope[] {
   const rows = db()
     .prepare("SELECT envelope FROM events WHERE turn_id = ? AND seq > ? ORDER BY seq")
-    .all(turnId, afterSeq) as Array<{ envelope: string }>;
-  return rows.map((row) => JSON.parse(row.envelope) as EventEnvelope);
+    .all(turnId, afterSeq);
+  // SAFETY: the only projected column is `envelope`, written by commitEvent
+  // as JSON.stringify of an EventEnvelope.
+  return (rows as Array<{ envelope: string }>).map((row) => JSON.parse(row.envelope) as EventEnvelope);
 }
 
 /** Rows committed but never published — the crash-between-commit-and-publish repair. */
 export function unpublishedEvents(): Array<{ turn_id: string; seq: number }> {
-  return db()
+  const rows = db()
     .prepare("SELECT turn_id, seq FROM event_outbox WHERE published = 0 ORDER BY turn_id, seq")
-    .all() as Array<{ turn_id: string; seq: number }>;
+    .all();
+  // SAFETY: the SELECT projects exactly the two outbox key columns.
+  return rows as Array<{ turn_id: string; seq: number }>;
 }
 
 export function markPublished(turnId: string, seq: number): void {
