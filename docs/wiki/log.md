@@ -32,6 +32,18 @@ committed events; shutdown closes events.db. Regression net: FULL pnpm test gree
 Commits 2980f62..b9e7baa pushed to fork. Next frontier: #3 PR-1 turn-engine extraction
 (plan filed in round1-mausbot-extraction.md §6), then #7 MausBotDriver + /api/internal seam.
 
+## [2026-08-20] implement | Eval seam v0 live — MausBotDriver surface served
+/api/internal/eval/{turns,status,events,seed} behind authorizedComms OR a dedicated
+OMB_EVAL_TOKEN bearer (dev-rig only; electron never sets it). Turn state machine (avenza
+vocabulary) now folds off the bus stream into events.db: accepted→running→awaiting_input→
+terminal with last_committed_seq + tool-call iteration proxy. event-log migration v2 adds
+thread_id for thread→turn resolution. Smoke-verified against a live server in a throwaway
+HOME: 401 unauth ✓, seed writes basename-only fixtures ✓, status {state, current_iteration,
+last_committed_seq, pending_set_id} ✓, replay after=N ✓. Lint parity with base on index.ts
+(63=63); typecheck clean; engine 43/43. Commit 0b0956f. Incident note: first smoke attempt
+leaked a test bot into repo-local .openmausbot (HOME redirect failed on missing mkdtemp) —
+cleaned; real home untouched. Next: #3 PR-1 extraction, then MausBotDriver client + baseline.
+
 ## [2026-08-20] research | Phase 1 complete — 2 rounds, 6 briefs, 5 ADRs
 Round 1 (mausbot): long-flow lifecycle (chain-of-rounds recommended; crash matrix + reconciler
 sweep list), index.ts extraction seams (server/engine/ layout + behavior-preserving PR-1),
