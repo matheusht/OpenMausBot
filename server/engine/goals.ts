@@ -84,7 +84,6 @@ export class GoalManager {
   private save(): void {
     const store: GoalStoreFile = { version: 1, goals: [...this.goals.values()] };
     writeFileAtomic(this.dataFile, JSON.stringify(store, null, 2), { mode: 0o600 });
-    this.dirty = false;
   }
 
   createGoal(input: { thread_id: string; bot_id: string; objective: string; max_rounds?: number }): GoalRecord {
