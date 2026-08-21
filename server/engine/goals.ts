@@ -42,7 +42,7 @@ export interface GoalRecord {
   updated_at: string;
 }
 
-export interface GoalStoreShape {
+export interface GoalStoreFile {
   version: 1;
   goals: GoalRecord[];
 }
@@ -57,7 +57,6 @@ const TERMINAL_OUTCOMES: ReadonlySet<RoundOutcome> = new Set(["succeeded", "fail
 
 export class GoalManager {
   private goals = new Map<string, GoalRecord>();
-  private dirty = false;
 
   constructor(
     private readonly dataFile: string,
@@ -72,8 +71,10 @@ export class GoalManager {
   private load(): void {
     if (!existsSync(this.dataFile)) return;
     try {
-      const raw = JSON.parse(readFileSync(this.dataFile, "utf8")) as GoalStoreShape;
-      for (const goal of raw.goals ?? []) this.goals.set(goal.goal_id, goal);
+      const raw = JSON.parse(readFileSync(this.dataFile, "utf8"));
+      // SAFETY: the file is only ever written by save() as a GoalStoreFile;
+      // a foreign or torn file throws above and starts the store empty.
+      for (const goal of (raw as GoalStoreFile).goals ?? []) this.goals.set(goal.goal_id, goal);
     } catch {
       // A torn store starts empty — same posture as delegations.json.
       this.goals.clear();
@@ -81,8 +82,8 @@ export class GoalManager {
   }
 
   private save(): void {
-    const shape: GoalStoreShape = { version: 1, goals: [...this.goals.values()] };
-    writeFileAtomic(this.dataFile, JSON.stringify(shape, null, 2), { mode: 0o600 });
+    const store: GoalStoreFile = { version: 1, goals: [...this.goals.values()] };
+    writeFileAtomic(this.dataFile, JSON.stringify(store, null, 2), { mode: 0o600 });
     this.dirty = false;
   }
 

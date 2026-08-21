@@ -2,7 +2,7 @@
 // recording, the continuation decision (succeeded closes; anything else
 // earns another round until the cap), prompt synthesis that feeds learned
 // context forward, and persistence that survives a manager rebuild.
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
