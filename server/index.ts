@@ -46,6 +46,9 @@ import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts"
 import { describeSpawnFailure, execCli } from "./procs.ts";
 import { buildNotification, type Notification } from "./notify.ts";
 import { isEffortLevel, type RequestOutcome, type RuntimeEvent } from "./contracts.ts";
+import { closeEventDb, commitEvent, markPublished, unpublishedEvents } from "./engine/event-log.ts";
+import { mapRuntimeEvent } from "./engine/event-mapper.ts";
+import { reconcileEventLog, sweepMcpTmpdirs } from "./engine/reconciler.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
@@ -115,6 +118,23 @@ const bundledSkills = loadBundledSkills();
 
 const bus = new EventBus();
 bus.attach(registry.instances());
+
+// ── durable event log (ADR 0002) ───────────────────────────────────────
+// Registered FIRST so every downstream subscriber (watchdog clock, fold,
+// SSE) only ever sees events that are already committed to events.db —
+// commit-before-publish, the avenza discipline. Crash repair runs at boot:
+// committed-but-unpublished rows are marked published (their listeners are
+// gone; the log is the record), and leaked MCP credential tempdirs from a
+// SIGKILL are swept.
+reconcileEventLog(unpublishedEvents, markPublished);
+sweepMcpTmpdirs();
+bus.subscribe((event: RuntimeEvent) => {
+  // Events before a turn exists (session handshakes) log under the thread
+  // scope — seq stays monotonic per key either way.
+  const scope = event.turnId ?? event.threadId;
+  const envelope = commitEvent(mapRuntimeEvent(event, scope));
+  markPublished(envelope.turn_id, envelope.seq);
+});
 
 // ── peer-agent comms wiring ────────────────────────────────────────────
 // A shared secret guards the localhost-only /api/internal endpoints the
@@ -4002,6 +4022,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     watchdog.stop();
     routines?.stop();
     webhookIngress?.server.close();
+    closeEventDb();
     void registry.disposeAll().finally(() => process.exit(0));
   });
 }
